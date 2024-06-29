@@ -1,10 +1,7 @@
-# Silly little script that accepts a folder as an argument and converts all the pickle files in it (pt, pth or other user-defined) to safetensors format.
-# This took much more time than what I'd like to admit.
+# Converts pickles to safetensors.
 # Usage: python safetensor_converter.py <input_folder> [file_extension_to_convert (default: pth)]
-# Requires safetensors and torch to be installed in your Python environment.
 
-# !! IMPORTANT: I've had files that wouldn't work as converted safetensors but worked fine as pth files (mostly upscale models).
-# Not sure why, but in any case the script won't delete any original files, so make sure your safetensors files work before deleting the originals.
+# Make sure you test the produced .safetensors files before deleting your original .pth files.
 
 import os
 import sys
