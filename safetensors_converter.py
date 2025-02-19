@@ -1,24 +1,31 @@
-# Converts pickles to safetensors.
-# Usage: python safetensor_converter.py <input_folder> [file_extension_to_convert (default: pth)]
+# Converts pickle files from pt/pth to safetensors format
+# Version 2.0, no longer has the 4 GB file limit \o/
 
-# Make sure you test the produced .safetensors files before deleting your original .pth files.
+# Usage: python safetensor_converter.py <file/folder>
+
+# Caution! Make sure you test the produced .safetensors files before deleting your original .pth files. Not all files can be converted successfully.
 
 import os
 import sys
 import torch
-import logging
 from safetensors.torch import save_file
+from colorama import Fore, Style, init
+from typing import Any, Dict, Union, List, Tuple
 from collections import OrderedDict
-
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s:: %(message)s",
-    level=logging.INFO,
-    datefmt="%H:%M:%S",
-)
+import importlib.metadata
+from packaging import version
 
 
-# Well yeah, it flattens dicts :D
-def flatten_dict(d, parent_key="", sep="_"):
+def check_safetensors_version() -> bool:
+    """Checks if the installed safetensors version is at least 0.4.1 (required for handling files larger than 4 GB)"""
+    safetensors_version = importlib.metadata.version('safetensors')
+    if version.parse(safetensors_version) < version.parse("0.4.1"):
+        return False
+    return True
+
+
+def flatten_dict(d: Dict[str, Any], parent_key: str = "", sep: str = "_") -> OrderedDict[str, Any]:
+    """Self-explanatory, flattens nested, multi-level dicts to single-level ones"""
     items = []
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
@@ -28,9 +35,8 @@ def flatten_dict(d, parent_key="", sep="_"):
             items.append((new_key, v))
     return OrderedDict(items)
 
-
-# Converts tensors to float32 (required for safetensors apparently)
-def convert_to_float32(tensor):
+def convert_to_float32(tensor: Union[torch.Tensor, List[Any], Tuple[Any, ...], Dict[str, Any]]) -> Union[torch.Tensor, List[Any], Tuple[Any, ...], Dict[str, Any]]:
+    """Converts all tensor types to float32"""
     if isinstance(tensor, torch.Tensor):
         return tensor.float().contiguous()
     elif isinstance(tensor, (list, tuple)):
@@ -39,9 +45,8 @@ def convert_to_float32(tensor):
         return {k: convert_to_float32(v) for k, v in tensor.items()}
     return tensor
 
-
-# Gets the checkpoint's state dict
-def get_state_dict(checkpoint):
+def get_state_dict(checkpoint: Union[torch.nn.Module, Dict[str, Any]]) -> Dict[str, Any]:
+    """Gets a checkpoint's state dict"""
     if isinstance(checkpoint, torch.nn.Module):
         return checkpoint.state_dict()
     elif isinstance(checkpoint, dict):
@@ -49,49 +54,41 @@ def get_state_dict(checkpoint):
     raise ValueError("Unsupported checkpoint format")
 
 
-# Does the main processing and saving for each file, returns various values (see comments)
-def process_file(input_path, output_path):
-    # Load, get state dict, flatten and convert to float32
-    checkpoint = torch.load(input_path, map_location="cpu")
+def process_file(input_file: str, output_folder: str) -> int:
+    """Main processing function, converts and saves the pickle. Returns 0, 1 or 2, depending on what happened - read the function's comments for info"""
+
+    # Load the file and prepare the state dict
+    checkpoint = torch.load(input_file, map_location="cpu", weights_only=True)
     state_dict = get_state_dict(checkpoint)
     flat_state_dict = flatten_dict(state_dict)
     flat_state_dict = convert_to_float32(flat_state_dict)
 
-    # Check file size
-    total_size = sum(
-        t.numel() * t.element_size()
-        for t in flat_state_dict.values()
-        if isinstance(t, torch.Tensor)
-    )
-    if total_size > 4 * (1024**3):  # 4 GB limit
-        raise ValueError(
-            f"File size ({total_size / (1024 ** 3):.2f} GB) exceeds safetensors' 4 GB limit."
-        )
-
     try:
-        save_file(flat_state_dict, output_path)
-        # The file was saved without incidents, returns False
-        return False
+        save_file(flat_state_dict, output_folder)
+        # I guess everything went fine right from the start? Return 1
+        return 1
     except RuntimeError as e:
-        # Of course there'd be incidents
+        # Of course it wouldn't go fine right from the start.
         if "non contiguous tensor" in str(e):
-            # Try to convert the tensors to contiguous and save again
+            # "safetensors (and many other serialization libraries) expect tensors to be stored in a contiguous block of memory. Sometimes,
+            # PyTorch tensors can become non-contiguous due to certain operations (like slicing, transposing, etc., in some cases)."
+            # Try to make the tensors contiguous and save again
             flat_state_dict = {
                 k: v.contiguous() if isinstance(v, torch.Tensor) else v
                 for k, v in flat_state_dict.items()
             }
             try:
-                save_file(flat_state_dict, output_path)
-                # The file was saved after making tensors contiguous, returns True so the user can check it
+                save_file(flat_state_dict, output_folder)
+                # Making the tensors contiguous worked, return 2 so we can inform the user about it
                 return True
             except Exception as e:
                 raise ValueError(
-                    f"Failed to save even after making tensors contiguous: {str(e)}"
+                    f"Failed to save the file in safetensors format: {e}"
                 )
         elif "invalid load key" in str(e):
-            # Tbh I'm not sure it's important to inform the user about this, but whatever, maybe they think it's something on their end
+            # Corrupted file
             raise ValueError(
-                "Invalid dict key found while loading. File is possibly corrupted and will be skipped."
+                "Invalid key found while trying to save. File is possibly corrupted and will be skipped."
             )
         else:
             raise  # Re-raise the original exception if it's not about non-contiguous tensors
