@@ -23,6 +23,19 @@ def check_safetensors_version() -> Tuple[bool, str]:
     return (True, safetensors_version)
 
 
+def state_dict_mem_size(state_dict: dict, less_than_gb: int = 0) -> Union[int, bool]:
+    """Calculates the memory size of a state dict and optionally checks if it's smaller than the given limit"""
+    # Checking file size isn't accurate really, we need the actual memory size
+    total_size = sum(
+        t.numel() * t.element_size()
+        for t in state_dict.values()
+        if isinstance(t, torch.Tensor)
+    )
+    if less_than_gb == 0:
+        return total_size
+    return total_size < less_than_gb * (1024**3)
+
+
 def flatten_dict(d: Dict[str, Any], parent_key: str = "", sep: str = "_") -> OrderedDict[str, Any]:
     """Self-explanatory, flattens nested, multi-level dicts to single-level ones"""
     items = []
@@ -55,19 +68,25 @@ def get_state_dict(checkpoint: Union[torch.nn.Module, Dict[str, Any]]) -> Dict[s
     raise ValueError("Unsupported checkpoint format")
 
 
-def convert_file(input_file: str, output_file: str) -> bool:
+def convert_file(input_file: str, output_file: str, ok_sft_version: bool) -> str:
     """Conversion function, receives a model file, converts it to .safetensors and saves it"""
     # Load the file and prepare the state dict
     try:
         state_dict = get_state_dict(torch.load(input_file, map_location="cpu", weights_only=True))
     except Exception as e:
-        raise ValueError(f"Could not load the input file and retrieve its state dict: {e}")
+        return f"2_**_Could not load the input file and retrieve its state dict: {e}"
     processed_state_dict = convert_to_float32(flatten_dict(state_dict))
 
+    if not ok_sft_version:
+        # Check if the model memory size is smaller than 4 GB
+        if not state_dict_mem_size(processed_state_dict, less_than_gb=4):
+            return "3_**_The model's memory size is larger than 4 GB, and the current safetensors version cannot handle such models"
+
+    # Try saving
     try:
         save_file(processed_state_dict, output_file)
         # It just worked I guess
-        return True
+        return "0_**_"
     except RuntimeError as e:
         # Of course it wouldn't work
         if "non contiguous tensor" in str(e):
@@ -79,20 +98,60 @@ def convert_file(input_file: str, output_file: str) -> bool:
             try:
                 save_file(processed_state_dict, output_file)
                 # Making the tensors contiguous worked
-                return False
+                return "1_**_Non-contiguous tensors were found and made contiguous before the model could be converted"
             except Exception as e:
-                raise ValueError(f"Failed to save the file in safetensors format: {e}")
+                return f"4_**_Non-contiguous tensors were found but the model conversion failed even after making them contiguous: {e}"
         elif "invalid load key" in str(e):
             # Invalid/corrupted file
-            raise ValueError("Invalid key found while trying to save as safetensors. The model file is either in invalid format or corrupted, and will be skipped.")
+            return f"5_**_Invalid load key found while trying to convert the model (either invalid format or corrupted file): {e}"
         else:
-            raise  # Re-raise the original exception if it's not about non-contiguous tensors
+            # Return the original exception since it's not one of the known ones
+            return f"6_**_Conversion failed: {e}"
 
 
-def main_processor(input_folder: str, input_file: str | None, output_folder: str):
+def main_processor(input_folder: str, input_file: str | None, output_folder: str, ok_sft_version: bool) -> Tuple[Dict[str, int], Dict[str, Dict[str, Union[int, str]]]]:
     """Main processing function, handles the input(s) and calls the conversion function as necessary"""
+    # Get the list of files to process
+    files_to_process = []
+    if input_file is not None:
+        files_to_process.append(input_file)
+    else:
+        files_to_process = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if os.path.isfile(f) and f.endswith((".pt", ".pth"))]
 
+    # Result structures
+    detailed_results = {}
+    result_codes = [
+        "Converted successfully",
+        "Converted after fixing non-contiguous tensors",
+        "Failed loading file and fetching state dict",
+        "Failed because of unsupported model memory size",
+        "Failed trying to fix non-contiguous tensors",
+        "Failed because of invalid format or corrupted data",
+        "Failed because of other reasons"
+    ]
+    summarized_results = {
+        "Total files processed": len(files_to_process),
+        "Converted successfully": 0,
+        "Converted after fixing non-contiguous tensors": 0,
+        "Failed loading file and fetching state dict": 0,
+        "Failed because of unsupported model memory size": 0,
+        "Failed trying to fix non-contiguous tensors": 0,
+        "Failed because of invalid format or corrupted data": 0,
+        "Failed because of other reasons": 0
+    }
 
+    # Iterate over the file list
+    for file in files_to_process:
+        output_file = os.path.join(output_folder, os.path.basename(file).replace(".pth", ".safetensors").replace(".pt", ".safetensors"))
+        file_result = convert_file(file, output_file, ok_sft_version).split("_**_")
+        detailed_results[file] = {
+            'result_code': int(file_result[0]),
+            'result_message': file_result[1],
+            'output_file': output_file
+        }
+        summarized_results[result_codes[detailed_results[file]['result_code']]] += 1
+
+    return summarized_results, detailed_results
 
 
 if __name__ == "__main__":
@@ -101,21 +160,21 @@ if __name__ == "__main__":
 
     # Show help message and exit if no args or if --help/-h is passed
     if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ("--help", "-h")):
-        print(Fore.CYAN + "\nPython script to convert PyTorch model files (.pt, .pth) to the safer .safetensors format.\n")
+        print(Fore.CYAN + "Converts PyTorch model files (.pt, .pth) to the safer .safetensors format.\n")
         print(Fore.CYAN + Style.BRIGHT + "Usage:")
-        print(Fore.CYAN + "python " + Style.BRIGHT + "safetensors_converter.py " + Fore.YELLOW + "<input_file/folder>" + Style.NORMAL + " [output_folder]\n")
+        print(Fore.CYAN + "python " + Style.BRIGHT + "safetensors_converter.py <input file/folder>" + Style.NORMAL + " [output folder]\n")
         print(Fore.CYAN + Style.BRIGHT + "Arguments:")
-        print(Fore.CYAN + Style.BRIGHT + "* input_file/folder:" + Fore.YELLOW + Style.NORMAL + "\n\tRequired.\n\tEither a single file or a folder containing .pt or .pth files to convert.")
-        print(Fore.CYAN + Style.BRIGHT + "* output_folder:" + Fore.YELLOW + Style.NORMAL + "\n\tOptional.\n\tThe folder to save the converted files to.\n\tDefault: Subfolder 'converted_safetensors', created in the input folder/the input file's folder.\n")
-        print(Fore.MAGENTA + Style.BRIGHT + "Important note:\n" + Style.NORMAL + "Not all models can be converted to functioning .safetensors versions.\nThe script won't delete or otherwise modify the original files.\n" + Style.BRIGHT + "Make sure you test the produced .safetensors files before deleting the original files!\n")
+        print(Fore.CYAN + Style.BRIGHT + "* input file/folder:" + Style.NORMAL + "\n\tRequired.\n\tEither a single file or a folder containing .pt or .pth files to convert.")
+        print(Fore.CYAN + Style.BRIGHT + "* output folder:" + Style.NORMAL + "\n\tOptional.\n\tThe folder to save the converted files to.\n\tDefault: Subfolder 'converted_safetensors', created inside the input folder/file's folder.\n")
+        print(Fore.YELLOW + Style.BRIGHT + "\n* Important note *\n" + Style.NORMAL + "Some models do not work when converted to .safetensors format.\n" + Style.BRIGHT + "Test the produced .safetensors files before deleting the original files!\n" + Style.NORMAL + "The script won't delete or otherwise modify the original files.\n")
         sys.exit(0)
 
     # Check safetensors version and ask user what to do
     ok_sft_version, sft_version_str = check_safetensors_version()
     if not ok_sft_version:
-        print(Fore.RED + Style.BRIGHT + f"The currently installed safetensors library version is {sft_version_str}, which is older than 0.4.1 and can only handle files smaller than 4 GB.")
-        print(Fore.RED + "You may proceed with the current version if the files you want to convert are smaller than 4 GB, otherwise please exit the script and update your safetensors library (e.g. with: pip install \"safetensors>=0.4.1\").\n")
-        user_input = input(Fore.RED + f"Proceed with current version {sft_version_str} and convert only files smaller than 4 GB? y/[n] :: ")
+        print(Fore.RED + Style.BRIGHT + f"\n* Warning *\nThe existing safetensors library version ({sft_version_str}) is older than 0.4.1 and can only handle models smaller than 4 GB.\n")
+        print(Fore.RED + "It will still work correctly, but will ignore models larger than 4 GB.\nYou can proceed if this limitation doesn't affect you, otherwise exit and update the safetensors library in your Python environment.\n")
+        user_input = input(Fore.RED + f"Use current version {sft_version_str} and ignore models larger than 4 GB? y/[n] :: ")
         if user_input.lower().strip() != "y":
             sys.exit(1)
 
@@ -130,7 +189,7 @@ if __name__ == "__main__":
         input_folder = input_path
         input_file = None
     else:
-        print(Fore.RED + Style.BRIGHT + "\nError! " + Style.NORMAL + f"The input argument ({input_path}) is not an existing file or folder. Exiting ...\n")
+        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"The input argument ({input_path}) is not an existing file or folder. Exiting ...\n")
         sys.exit(1)
 
     # Check output path argument and create output folder
@@ -142,7 +201,28 @@ if __name__ == "__main__":
     try:
         os.makedirs(output_path, exist_ok=True)
     except Exception as e:
-        print(Fore.RED + Style.BRIGHT + "\nError! " + Style.NORMAL + f"Couldn't create the output folder ({output_path}):\n{e}\nExiting ...\n")
+        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"Couldn't create the output folder ({output_path}):\n{e}\nExiting ...\n")
+        sys.exit(1)
 
-    # Start processing
-    probably_stats_idk_yet = process_input(input_folder, input_file, output_path)
+    # Process and get results
+    summarized_results, detailed_results = main_processor(input_folder, input_file, output_path, ok_sft_version)
+
+    # Print results
+    print(Fore.CYAN + Style.BRIGHT + "\n\n**| Conversion Results |**\n")
+    print(Fore.CYAN + Style.BRIGHT + "Summary:")
+    for key, value in summarized_results.items():
+        print(Fore.CYAN + f"{key}: {value}")
+    print("\n\n")
+
+    print(Fore.CYAN + Style.BRIGHT + "Detailed Results:")
+    for file, result in detailed_results.items():
+        print(Fore.CYAN + f"\nFile: {file}")
+        print(Fore.CYAN + f"Output: {result['output_file']}")
+        print(Fore.CYAN + f"Result: {result['result_message']}")
+
+    print(Fore.CYAN + Style.BRIGHT + "\n\n**| Conversion Completed |**\n")
+    print(Fore.CYAN + Style.BRIGHT + "The converted files are saved in the output folder.\n")
+    print(Fore.CYAN + Style.BRIGHT + "Remember to test the produced .safetensors files before deleting the original files.\n")
+    print(Fore.CYAN + Style.BRIGHT + "Exiting ...\n")
+
+    sys.exit(0)
