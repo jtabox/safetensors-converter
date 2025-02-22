@@ -6,6 +6,7 @@
 
 import os
 import sys
+from tabnanny import verbose
 import torch
 from safetensors.torch import save_file
 from colorama import Fore, Style, init
@@ -71,6 +72,7 @@ def get_state_dict(checkpoint: Union[torch.nn.Module, Dict[str, Any]]) -> Dict[s
 def convert_file(input_file: str, output_file: str, ok_sft_version: bool) -> str:
     """Conversion function, receives a model file, converts it to .safetensors and saves it"""
     # Load the file and prepare the state dict
+    print(Fore.CYAN + f"Processing file: {input_file}")
     try:
         state_dict = get_state_dict(torch.load(input_file, map_location="cpu", weights_only=True))
     except Exception as e:
@@ -162,23 +164,15 @@ if __name__ == "__main__":
     if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ("--help", "-h")):
         print(Fore.CYAN + "Converts PyTorch model files (.pt, .pth) to the safer .safetensors format.\n")
         print(Fore.CYAN + Style.BRIGHT + "Usage:")
-        print(Fore.CYAN + "python " + Style.BRIGHT + "safetensors_converter.py <input file/folder>" + Style.NORMAL + " [output folder]\n")
+        print(Fore.CYAN + "python " + Style.BRIGHT + "safetensors_converter.py <input file/folder>" + Style.NORMAL + " [output folder] [--verbose]\n")
         print(Fore.CYAN + Style.BRIGHT + "Arguments:")
         print(Fore.CYAN + Style.BRIGHT + "* input file/folder:" + Style.NORMAL + "\n\tRequired.\n\tEither a single file or a folder containing .pt or .pth files to convert.")
         print(Fore.CYAN + Style.BRIGHT + "* output folder:" + Style.NORMAL + "\n\tOptional.\n\tThe folder to save the converted files to.\n\tDefault: Subfolder 'converted_safetensors', created inside the input folder/file's folder.\n")
+        print(Fore.CYAN + Style.BRIGHT + "* --verbose:" + Style.NORMAL + "\n\tOptional.\n\tWill print extra details during and after the process, and also log them to file.\n\tDefault: Off - Will only print basic info.\n")
         print(Fore.YELLOW + Style.BRIGHT + "\n* Important note *\n" + Style.NORMAL + "Some models do not work when converted to .safetensors format.\n" + Style.BRIGHT + "Test the produced .safetensors files before deleting the original files!\n" + Style.NORMAL + "The script won't delete or otherwise modify the original files.\n")
         sys.exit(0)
 
-    # Check safetensors version and ask user what to do
-    ok_sft_version, sft_version_str = check_safetensors_version()
-    if not ok_sft_version:
-        print(Fore.RED + Style.BRIGHT + f"\n* Warning *\nThe existing safetensors library version ({sft_version_str}) is older than 0.4.1 and can only handle models smaller than 4 GB.\n")
-        print(Fore.RED + "It will still work correctly, but will ignore models larger than 4 GB.\nYou can proceed if this limitation doesn't affect you, otherwise exit and update the safetensors library in your Python environment.\n")
-        user_input = input(Fore.RED + f"Use current version {sft_version_str} and ignore models larger than 4 GB? y/[n] :: ")
-        if user_input.lower().strip() != "y":
-            sys.exit(1)
-
-    # Parse input argument, must be an existing file or folder
+    # At least 1 arg given, it may only be an input file or folder
     input_path = os.path.abspath(sys.argv[1])
     if os.path.isfile(input_path):
         # Single file
@@ -189,40 +183,76 @@ if __name__ == "__main__":
         input_folder = input_path
         input_file = None
     else:
-        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"The input argument ({input_path}) is not an existing file or folder. Exiting ...\n")
+        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"The input argument ({input_path}) is not an existing file or folder.\nCorrect it and re-run. Exiting ...\n")
         sys.exit(1)
 
-    # Check output path argument and create output folder
-    if len(sys.argv) == 2:
-        output_path = os.path.join(input_folder, "converted_safetensors")
-    else:
-        output_path = os.path.abspath(sys.argv[2])
+    # Default output path and verbose mode. If they're not changed by the ifs below, they'll be used as is
+    output_path = os.path.join(input_folder, "converted_safetensors")
+    verbose_mode = False
 
+    # Check for 2nd + 3rd args, only valid combos are:
+    # 2nd -> output folder and 3rd -> verbose flag, or
+    # 2nd -> verbose flag. Anything else after the flag is ignored.
+    if len(sys.argv) >= 3:
+        # 2nd exists
+        if sys.argv[2].strip().lower() == "--verbose":
+            # is the verbose flag
+            verbose_mode = True
+        elif len(sys.argv) >= 4:
+            # 3rd exists, assume 2nd is the output folder
+            output_path = os.path.abspath(sys.argv[2])
+            if sys.argv[3].strip().lower() == "--verbose":
+                # 3rd is the verbose flag
+                verbose_mode = True
+        else:
+            # at least 2 args were passed, the 2nd isn't verbose flag, assume it's the output folder name
+            output_path = os.path.abspath(sys.argv[2])
+
+    # Try creating the output folder if it doesn't exist
     try:
         os.makedirs(output_path, exist_ok=True)
     except Exception as e:
-        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"Couldn't create the output folder ({output_path}):\n{e}\nExiting ...\n")
+        print(Fore.RED + Style.BRIGHT + "\n\nError! " + Style.NORMAL + f"Trying to create the output folder ({output_path}) failed:\n{e}\nResolve or specify other output folder. Exiting ...\n")
         sys.exit(1)
 
+    # Check safetensors version and ask user what to do
+    if verbose_mode:
+        print(Fore.CYAN + "\n* Checking the installed safetensors library version ...\n")
+    ok_sft_version, sft_version_str = check_safetensors_version()
+    if not ok_sft_version:
+        print(Fore.RED + Style.BRIGHT + f"\n* Warning *\nThe existing safetensors library version ({sft_version_str}) is older than 0.4.1 and can only handle models smaller than 4 GB.\n")
+        print(Fore.RED + "It will still work correctly, but models larger than 4 GB will be skipped.\nYou can proceed if this limitation doesn't affect you, otherwise exit and update the safetensors library in your Python environment.\n")
+        user_input = input(Fore.RED + f"Continue with current version {sft_version_str} and its size limitation? y/[n] :: ")
+        if user_input.lower().strip() != "y":
+            print(Fore.RED + "\nInstall version 0.4.1 or higher, e.g. with 'pip install \"safetensors>=0.4.1\"' or other appropriate way for your system.\nExiting ...\n")
+            sys.exit(1)
+        else:
+            print(Fore.YELLOW + f"\n* Continuing with current safetensors version {sft_version_str} and will skip any models larger than 4 GB.\n")
+    else:
+        print(Fore.GREEN + f"\n* Installed safetensors library version is {sft_version_str}, will convert all the specified models without model size limitations.\n")
+
     # Process and get results
+    if verbose_mode:
+        print(Fore.CYAN + "\n* Starting the conversion process ...\n")
     summarized_results, detailed_results = main_processor(input_folder, input_file, output_path, ok_sft_version)
 
-    # Print results
+    # Print results' summary
     print(Fore.CYAN + Style.BRIGHT + "\n\n**| Conversion Results |**\n")
-    print(Fore.CYAN + Style.BRIGHT + "Summary:")
     for key, value in summarized_results.items():
-        print(Fore.CYAN + f"{key}: {value}")
+        if value > 0:
+            message_color = Fore.RED if "Failed" in key else Fore.GREEN
+            print(message_color + f"{key} ::   {value}")
     print("\n\n")
 
-    print(Fore.CYAN + Style.BRIGHT + "Detailed Results:")
+    print(Fore.CYAN + Style.BRIGHT + "Detailed results:")
     for file, result in detailed_results.items():
         print(Fore.CYAN + f"\nFile: {file}")
         print(Fore.CYAN + f"Output: {result['output_file']}")
         print(Fore.CYAN + f"Result: {result['result_message']}")
 
-    print(Fore.CYAN + Style.BRIGHT + "\n\n**| Conversion Completed |**\n")
-    print(Fore.CYAN + Style.BRIGHT + "The converted files are saved in the output folder.\n")
-    print(Fore.CYAN + Style.BRIGHT + "Remember to test the produced .safetensors files before deleting the original files.\n")
-    print(Fore.CYAN + Style.BRIGHT + "Exiting ...\n")
+    print(Fore.GREEN + Style.BRIGHT + "\n\n**| Conversion Completed |**\n")
+    print(Fore.CYAN + f"The produced safetensor files can be found in {output_path}")
+    print(Fore.YELLOW + Style.BRIGHT + "Remember to test them " + Fore.CYAN + Style.NORMAL + "before deleting their original counterparts!\n\n")
+    print(Fore.CYAN + "\nExiting ...\n")
 
     sys.exit(0)
