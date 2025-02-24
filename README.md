@@ -1,10 +1,10 @@
-#### SafeTensors converter script v2 - \o/
+### SafeTensors converter script v2 - \o/
 
 *(yes, the 10000th one on github but whatever)*
 
 A Python script that converts PyTorch model files and checkpoints (.pt and .pth) to the .safetensors format which is newer, shinier and is a more secure way to store and load model data, without the risk of potentially executing malicious code hidden inside a model file of the previous format.
 
-#### "Did it really need a v2 lol"
+### "Did it really need a v2 lol"
 
 Alright. So, for some incomprehensible to me reason, this repo has received 10 stars, which is about 10 more than what I ever expected it (or me in general) to receive. So I kinda felt obligated to say "thanks for the stars", and I decided to do it by writing a (hopefully) better version of the script.
 ~~Of course there's also the very practical matter of the previous script not supporting files larger than 4 GB because it was using an older version of the safetensors library, which was a major motive, ngl.~~
@@ -19,7 +19,7 @@ Changes from v1:
 * **C O L O R**. In the terminal. Lots of colored text. It's like a circus now. I don't care.
 * Other minor silly stuff that showed my lack of experience in Python and in coding in general. I've fixed those, but I'm sure I'll find double so many when I read through the script again in 6 months, but what can you do...
 
-#### Installation & Usage
+### Installation & Usage
 
 * **Install**:
   No installation required for the script itself, but it uses 3 packages that might need to be installed if they're not already present.
@@ -64,7 +64,7 @@ python safetensors_converter.py <input_file/folder> [output_folder] [--verbose]
   In any case, a JSON file with more info will be saved in the output folder.
 ```
 
-#### Important Note - Please Read
+### Important Note - Please Read
 
 Make sure you **test the produced .safetensors** files *before deleting your original files*!
 
