@@ -60,8 +60,9 @@ pip install -r requirements.txt
 
 # OR each one manually:
 
-# PyTorch, any variant (CPU/GPU) will work, get the appropriate install
-# command for your system from https://pytorch.org/get-started/locally/
+# PyTorch, any variant (CPU/GPU) will work, though it's probably better to
+# get the appropriate install command for your system and python version
+# from https://pytorch.org/get-started/locally/
 pip install torch
 
 # safetensors
@@ -70,6 +71,12 @@ pip install 'safetensors>=0.4.1' # Install at least version 0.4.1
 
 # Colorama, for the terminal color circus
 pip install colorama
+
+# Normally, installing the libraries above will install all their necessary
+# dependencies, but if you get an error that some library is missing, you
+# can try installing the dependencies below
+pip install packaging
+pip install numpy
 ```
 
 ---

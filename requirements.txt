@@ -1,5 +1,11 @@
-torch
-safetensors>=0.4.1
 colorama
-packaging
-numpy
+safetensors>=0.4.1
+
+# The line below works as is and installs torch, but it's probably better to replace it with the appropriate version
+# for your system and Python version, check at https://pytorch.org/get-started/locally/
+torch
+
+# Normally, installing the libraries above will install all their necessary dependencies, but if you get an error
+# that some library is missing, you can try uncommenting and installing the dependencies below
+# packaging
+# numpy
